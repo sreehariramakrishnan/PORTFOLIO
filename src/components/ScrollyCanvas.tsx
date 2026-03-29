@@ -13,6 +13,7 @@ function ScrollyCanvasContent() {
 
   const imagesRef = useRef<HTMLImageElement[]>([]);
   const frameRef = useRef(0);
+  const lastRenderedFrameRef = useRef(-1); // Prevent redundant frame draws
   const ticking = useRef(false);
 
   const [loaded, setLoaded] = useState(0);
@@ -34,6 +35,9 @@ function ScrollyCanvasContent() {
 
       img.onload = () => {
         setLoaded((prev) => prev + 1);
+        if (i === 0) {
+          requestAnimationFrame(() => drawFrame(0));
+        }
       };
 
       imgs.push(img);
@@ -51,11 +55,12 @@ function ScrollyCanvasContent() {
     if (!ctx) return;
 
     const img = imagesRef.current[index];
-    if (!img) return;
+    if (!img || !img.complete) return;
 
     const { clientWidth, clientHeight } = canvas;
 
-    const dpr = window.devicePixelRatio || 1;
+    // CRITICAL: Limit DPR to prevent excessive rendering load
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
 
     if (
       canvas.width !== clientWidth * dpr ||
@@ -79,18 +84,18 @@ function ScrollyCanvasContent() {
 
     ctx.clearRect(0, 0, clientWidth, clientHeight);
     ctx.drawImage(img, x, y, drawWidth, drawHeight);
+    
+    lastRenderedFrameRef.current = index;
   };
-
-  // 🎬 INITIAL FRAME
-  useEffect(() => {
-    if (loaded > 0) {
-      drawFrame(0);
-    }
-  }, [loaded]);
 
   // 🚀 THROTTLED SCROLL RENDERING
   useMotionValueEvent(scrollYProgress, 'change', (latest) => {
-    frameRef.current = Math.floor(latest * (TOTAL_FRAMES - 1));
+    const nextFrame = Math.floor(latest * (TOTAL_FRAMES - 1));
+    
+    // SKIP IF ALREADY DRAWN
+    if (nextFrame === lastRenderedFrameRef.current) return;
+    
+    frameRef.current = nextFrame;
 
     if (!ticking.current) {
       ticking.current = true;
@@ -104,12 +109,22 @@ function ScrollyCanvasContent() {
 
   // 📱 HANDLE RESIZE
   useEffect(() => {
+    let resizeTimer: ReturnType<typeof setTimeout>;
+    
     const handleResize = () => {
-      drawFrame(frameRef.current);
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        // Invalidate last rendered frame to ensure redraw
+        lastRenderedFrameRef.current = -1;
+        drawFrame(frameRef.current);
+      }, 100);
     };
 
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   return (
